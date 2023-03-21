@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -677,17 +678,36 @@ func (lb *LoadBalancer) TryConnectEndpoints(service proxy.ServicePortName, srcAd
 			return nil, err
 		}
 		klog.V(3).InfoS("Mapped service to endpoint", "service", service, "endpoint", endpoint)
-		// NOTE: outConn can be a net.Conn(golang) or network.Stream(libp2p)
-		outConn, err := lb.dialEndpoint(protocol, endpoint)
-		if err != nil {
-			if netutil.IsTooManyFDsError(err) {
-				panic("Dial failed: " + err.Error())
+
+		var outConn net.Conn
+
+		if lb.CheckSVCRoute(service) {
+			klog.Infof("[route]: routing a specific task")
+			outConn, err = lb.dialEndpoint(protocol, endpoint)
+			if err != nil {
+				if netutil.IsTooManyFDsError(err) {
+					panic("Dial failed: " + err.Error())
+				}
+				klog.ErrorS(err, "Dial failed")
+				sessionAffinityReset = true
+				time.Sleep(dialTimeout)
+				continue
 			}
-			klog.ErrorS(err, "Dial failed")
-			sessionAffinityReset = true
-			time.Sleep(dialTimeout)
-			continue
+		} else {
+			// NOTE: outConn can be a net.Conn(golang) or network.Stream(libp2p)
+			klog.Infof("[route]: connecting with a general task")
+			outConn, err = lb.dialEndpoint(protocol, endpoint)
+			if err != nil {
+				if netutil.IsTooManyFDsError(err) {
+					panic("Dial failed: " + err.Error())
+				}
+				klog.ErrorS(err, "Dial failed")
+				sessionAffinityReset = true
+				time.Sleep(dialTimeout)
+				continue
+			}
 		}
+
 		if req != nil {
 			reqBytes, err := netutil.HttpRequestToBytes(req)
 			if err == nil {
@@ -803,4 +823,10 @@ func (lb *LoadBalancer) GetServicePortName(namespacedName types.NamespacedName, 
 		}
 	}
 	return proxy.ServicePortName{}, false
+}
+
+// CheckSVCRoute todo: We need another way to deal with the check
+func (lb *LoadBalancer) CheckSVCRoute(service proxy.ServicePortName) bool {
+	klog.Infof("[router] check the svc need route: %v", service)
+	return strings.Contains(service.NamespacedName.String(), "route")
 }

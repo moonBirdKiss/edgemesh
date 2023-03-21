@@ -13,9 +13,9 @@
 # limitations under the License.
 
 GOPATH?=$(shell go env GOPATH)
-IMAGE_REPO ?= kubeedge
+IMAGE_REPO ?= langzijiangnan
 ARCH ?= amd64
-IMAGE_TAG ?= $(shell git describe --tags)
+IMAGE_TAG ?= v1
 GO_LDFLAGS='$(shell hack/make-rules/version.sh)'
 
 # make all builds both agent and server binaries
@@ -169,7 +169,7 @@ endif
 .PHONY: images agentimage gatewayimage
 images: agentimage gatewayimage
 agentimage gatewayimage:
-	docker build --build-arg GO_LDFLAGS=${GO_LDFLAGS} -t kubeedge/edgemesh-${@:image=}:${IMAGE_TAG} -f build/${@:image=}/Dockerfile .
+	docker build --build-arg GO_LDFLAGS=${GO_LDFLAGS} -t langzijiangnan/edgemesh-${@:image=}:${IMAGE_TAG} -f build/${@:image=}/Dockerfile .
 
 
 .PHONY: push push-all push-multi-platform-images
