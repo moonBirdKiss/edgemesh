@@ -242,6 +242,136 @@ type ProxyOptions struct {
 	Port     int32
 }
 
+func (t *EdgeTunnel) GetRouteStream(opts ProxyOptions) (*StreamConn, error) {
+	var destInfo peer.AddrInfo
+	var err error
+
+	destName := opts.NodeName
+	destID, exists := t.nodePeerMap[destName]
+	if !exists {
+		destID, err = PeerIDFromString(destName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate peer id for %s err: %w", destName, err)
+		}
+		destInfo = peer.AddrInfo{ID: destID, Addrs: []ma.Multiaddr{}}
+		// mapping nodeName and peerID
+		klog.Infof("[route]: Could not find peer %s in cache, auto generate peer info: %s", destName, destInfo)
+		t.nodePeerMap[destName] = destID
+	} else {
+		destInfo = t.p2pHost.Peerstore().PeerInfo(destID)
+	}
+	if err = AddCircuitAddrsToPeer(&destInfo, t.relayMap); err != nil {
+		return nil, fmt.Errorf("failed to add circuit addrs to peer %s", destInfo)
+	}
+	t.p2pHost.Peerstore().AddAddrs(destInfo.ID, destInfo.Addrs, peerstore.PermanentAddrTTL)
+
+	stream, err := t.p2pHost.NewStream(network.WithUseTransient(t.hostCtx, "relay"), destID, defaults.RouteProtocol)
+	if err != nil {
+		return nil, fmt.Errorf("new stream between %s: %s err: %w", destName, destInfo, err)
+	}
+	klog.Infof("New stream between peer %s: %s success", destName, destInfo)
+	// defer stream.Close() // will close the stream elsewhere
+
+	streamWriter := protoio.NewDelimitedWriter(stream)
+	streamReader := protoio.NewDelimitedReader(stream, MaxReadSize)
+
+	// handshake with dest peer
+	msg := &proxypb.Proxy{
+		Type:     proxypb.Proxy_CONNECT.Enum(),
+		Protocol: &opts.Protocol,
+		NodeName: &opts.NodeName,
+		Ip:       &opts.IP,
+		Port:     &opts.Port,
+	}
+	if err = streamWriter.WriteMsg(msg); err != nil {
+		resetErr := stream.Reset()
+		if resetErr != nil {
+			return nil, fmt.Errorf("stream between %s reset err: %w", opts.NodeName, resetErr)
+		}
+		return nil, fmt.Errorf("write conn msg to %s err: %w", opts.NodeName, err)
+	}
+
+	// read response
+	msg.Reset()
+	if err = streamReader.ReadMsg(msg); err != nil {
+		resetErr := stream.Reset()
+		if resetErr != nil {
+			return nil, fmt.Errorf("stream between %s reset err: %w", opts.NodeName, resetErr)
+		}
+		return nil, fmt.Errorf("read conn result msg from %s err: %w", opts.NodeName, err)
+	}
+	if msg.GetType() == proxypb.Proxy_FAILED {
+		resetErr := stream.Reset()
+		if resetErr != nil {
+			return nil, fmt.Errorf("stream between %s reset err: %w", opts.NodeName, err)
+		}
+		return nil, fmt.Errorf("libp2p dial %v err: Proxy.type is %s", opts, msg.GetType())
+	}
+
+	msg.Reset()
+	klog.Infof("libp2p dial %v success", opts)
+
+	return NewStreamConn(stream), nil
+}
+
+func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
+	remotePeer := peer.AddrInfo{
+		ID:    stream.Conn().RemotePeer(),
+		Addrs: []ma.Multiaddr{stream.Conn().RemoteMultiaddr()},
+	}
+	klog.Infof("[route]: Proxy service got a new stream from %s", remotePeer)
+
+	streamWriter := protoio.NewDelimitedWriter(stream)
+	streamReader := protoio.NewDelimitedReader(stream, MaxReadSize) // TODO get maxSize from default
+
+	// read handshake
+	msg := new(proxypb.Proxy)
+	err := streamReader.ReadMsg(msg)
+	if err != nil {
+		klog.Errorf("Read msg from %s err: %v", remotePeer, err)
+		return
+	}
+	if msg.GetType() != proxypb.Proxy_CONNECT {
+		klog.Errorf("Read msg from %s type should be CONNECT", remotePeer)
+		return
+	}
+	targetProto := msg.GetProtocol()
+	targetNode := msg.GetNodeName()
+	targetIP := msg.GetIp()
+	targetPort := msg.GetPort()
+	targetAddr := fmt.Sprintf("%s:%d", targetIP, targetPort)
+
+	proxyConn, err := tryDialEndpoint(targetProto, targetIP, int(targetPort))
+	if err != nil {
+		klog.Errorf("l4 proxy connect to %v err: %v", msg, err)
+		msg.Reset()
+		msg.Type = proxypb.Proxy_FAILED.Enum()
+		if err = streamWriter.WriteMsg(msg); err != nil {
+			klog.Errorf("Write msg to %s err: %v", remotePeer, err)
+			return
+		}
+		return
+	}
+
+	// write response
+	msg.Type = proxypb.Proxy_SUCCESS.Enum()
+	err = streamWriter.WriteMsg(msg)
+	if err != nil {
+		klog.Errorf("Write msg to %s err: %v", remotePeer, err)
+		return
+	}
+	msg.Reset()
+
+	streamConn := NewStreamConn(stream)
+	switch targetProto {
+	case TCP:
+		go netutil.ProxyConn(streamConn, proxyConn)
+	case UDP:
+		go netutil.ProxyConnUDP(streamConn, proxyConn.(*net.UDPConn))
+	}
+	klog.Infof("[route]: Success proxy for {%s %s %s}", targetProto, targetNode, targetAddr)
+}
+
 // GetProxyStream establishes a new stream with a destination peer, either directly or through a relay node,
 // by performing a handshake with the destination peer over the stream to confirm the connection.
 // It first looks up the destination peer's ID in a cache, and if not found, generates the peer ID and adds circuit addresses to it.

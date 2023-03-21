@@ -53,6 +53,7 @@ const (
 	// DiscoveryProtocol and ProxyProtocol maintained by EdgeMesh Author
 	DiscoveryProtocol protocol.ID = "/libp2p/tunnel-discovery/1.0.0"
 	ProxyProtocol     protocol.ID = "/libp2p/tunnel-proxy/1.0.0"
+	RouteProtocol     protocol.ID = "/libp2p/tunnel-route/1.0.0"
 
 	MdnsDiscovery DiscoveryType = "MDNS"
 	DhtDiscovery  DiscoveryType = "DHT"

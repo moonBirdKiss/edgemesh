@@ -683,7 +683,7 @@ func (lb *LoadBalancer) TryConnectEndpoints(service proxy.ServicePortName, srcAd
 
 		if lb.CheckSVCRoute(service) {
 			klog.Infof("[route]: routing a specific task")
-			outConn, err = lb.dialEndpoint(protocol, endpoint)
+			outConn, err = lb.dialRouteEndpoint(protocol, endpoint)
 			if err != nil {
 				if netutil.IsTooManyFDsError(err) {
 					panic("Dial failed: " + err.Error())
@@ -720,6 +720,44 @@ func (lb *LoadBalancer) TryConnectEndpoints(service proxy.ServicePortName, srcAd
 		return outConn, nil
 	}
 	return nil, fmt.Errorf("failed to connect to an endpoint")
+}
+
+// dialEndpoint If the endpoint contains node name then try to dial stream conn or try to dial net conn.
+func (lb *LoadBalancer) dialRouteEndpoint(protocol, endpoint string) (net.Conn, error) {
+	targetNode, targetPod, targetIP, targetPort, ok := parseEndpoint(endpoint)
+	if !ok {
+		return nil, fmt.Errorf("invalid endpoint %s", endpoint)
+	}
+
+	klog.Infof("[route]: lb.Config.NodeName: ", lb.Config.NodeName)
+
+	switch targetNode {
+	// I suspect defaults.EmptyNodeName and lb.Config.NodeName are related to the local node
+	case defaults.EmptyNodeName, lb.Config.NodeName:
+		// TODO: This could spin up a new goroutine to make the outbound connection,
+		// and keep accepting inbound traffic.
+		outConn, err := net.Dial(protocol, net.JoinHostPort(targetIP, targetPort))
+		if err != nil {
+			return nil, err
+		}
+		klog.Infof("[route]: Dial legacy network between %s - {%s %s %s:%s}", targetPod, protocol, targetNode, targetIP, targetPort)
+		return outConn, nil
+	default:
+		targetPort, err := strconv.ParseInt(targetPort, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid endpoint %s", endpoint)
+		}
+		proxyOpts := tunnel.ProxyOptions{Protocol: protocol, NodeName: targetNode, IP: targetIP, Port: int32(targetPort)}
+
+		// tunnel.Agent.GetProxyStream()
+		streamConn, err := tunnel.Agent.GetProxyStream(proxyOpts)
+		if err != nil {
+			return nil, fmt.Errorf("get proxy stream from %s error: %v", targetNode, err)
+		}
+
+		klog.Infof("[route]: Dial libp2p network between %s - {%s %s %s:%d}", targetPod, protocol, targetNode, targetIP, targetPort)
+		return streamConn, nil
+	}
 }
 
 // dialEndpoint If the endpoint contains node name then try to dial stream conn or try to dial net conn.

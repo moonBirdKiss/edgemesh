@@ -257,6 +257,8 @@ func newEdgeTunnel(c *v1alpha1.EdgeTunnelConfig) (*EdgeTunnel, error) {
 	if c.Mode == defaults.ServerClientMode {
 		h.SetStreamHandler(defaults.DiscoveryProtocol, edgeTunnel.discoveryStreamHandler)
 		h.SetStreamHandler(defaults.ProxyProtocol, edgeTunnel.proxyStreamHandler)
+		h.SetStreamHandler(defaults.RouteProtocol, edgeTunnel.routeStreamHandler)
+
 	}
 	Agent = edgeTunnel
 	return edgeTunnel, nil
