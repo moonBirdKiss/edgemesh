@@ -31,6 +31,8 @@ ssh dqf@$EDGE0 'bash -c "docker rmi $(docker image ls | grep none | awk '\''{pri
 echo "* * * * * * * * * EDGE0 Cleared * * * * * * * * * *"
 echo ""
 
+# docker rmi $(docker image ls | grep none | awk '{print $3}')
+
 # edge-1上清理image
 ssh dqf@$EDGE1 'bash -c "docker rmi $(docker image ls | grep none | awk '\''{print $3}'\'')"'
 echo "* * * * * * * * * EDGE1 Cleared * * * * * * * * * *"

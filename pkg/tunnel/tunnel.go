@@ -248,13 +248,15 @@ func (t *EdgeTunnel) GetRouteStream(opts ProxyOptions) (*StreamConn, error) {
 
 	destName := opts.NodeName
 
-	klog.Infof("[route]: starting to query the dst path, destName: ", destName)
+	klog.Info("[route]: starting to query the dst path, destName: ", destName)
 	path, err := t.routeTable.query(destName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get the route path")
+	if err != nil || len(path) == 0 {
+		return nil, fmt.Errorf("failed to get the route path: %v", path)
 	}
 	klog.Info("[route]: the route path is ", path)
 
+	//destName = path[0]
+	// generate the next dest-node information
 	destID, exists := t.nodePeerMap[destName]
 	if !exists {
 		destID, err = PeerIDFromString(destName)
