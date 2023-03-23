@@ -729,7 +729,7 @@ func (lb *LoadBalancer) dialRouteEndpoint(protocol, endpoint string) (net.Conn, 
 		return nil, fmt.Errorf("invalid endpoint %s", endpoint)
 	}
 
-	klog.Infof("[route]: lb.Config.NodeName: ", lb.Config.NodeName)
+	klog.Info("[route]: lb.Config.NodeName: ", lb.Config.NodeName)
 
 	switch targetNode {
 	// I suspect defaults.EmptyNodeName and lb.Config.NodeName are related to the local node
@@ -750,7 +750,7 @@ func (lb *LoadBalancer) dialRouteEndpoint(protocol, endpoint string) (net.Conn, 
 		proxyOpts := tunnel.ProxyOptions{Protocol: protocol, NodeName: targetNode, IP: targetIP, Port: int32(targetPort)}
 
 		// tunnel.Agent.GetProxyStream()
-		streamConn, err := tunnel.Agent.GetProxyStream(proxyOpts)
+		streamConn, err := tunnel.Agent.GetRouteStream(proxyOpts)
 		if err != nil {
 			return nil, fmt.Errorf("get proxy stream from %s error: %v", targetNode, err)
 		}

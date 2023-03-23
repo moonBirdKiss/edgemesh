@@ -43,6 +43,7 @@ type EdgeTunnel struct {
 	holepunchService *holepunch.Service
 	stopCh           chan struct{}
 	cfgWatcher       *fsnotify.Watcher
+	routeTable       *RouteTable
 }
 
 // Name of EdgeTunnel
@@ -248,7 +249,10 @@ func newEdgeTunnel(c *v1alpha1.EdgeTunnelConfig) (*EdgeTunnel, error) {
 		holepunchService: holepunchService,
 		stopCh:           make(chan struct{}),
 		cfgWatcher:       watcher,
+		routeTable:       NewRouteTable(),
 	}
+
+	edgeTunnel.routeTable.initTable()
 
 	// run relay finder
 	go edgeTunnel.runRelayFinder(ddht, peerSource, time.Duration(c.FinderPeriod)*time.Second)
