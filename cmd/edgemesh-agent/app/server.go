@@ -53,7 +53,7 @@ func NewEdgeMeshAgentCommand() *cobra.Command {
 				klog.Exit(kubeedgeutil.SpliceErrors(errs.ToAggregate().Errors()))
 			}
 
-			klog.Infof("Validation of mulit-route version. Version: %+v", version.Get())
+			klog.Infof("The function of Store and forward is completed . Version: %+v", version.Get())
 			if err = Run(cfg); err != nil {
 				klog.Exit("run edgemesh-agent failed: ", err)
 			}

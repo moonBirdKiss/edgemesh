@@ -1,16 +1,26 @@
 package tunnel
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
+	"github.com/libp2p/go-msgio/protoio"
 	"io/ioutil"
+	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	ds "github.com/ipfs/go-datastore"
 	dsync "github.com/ipfs/go-datastore/sync"
+	"github.com/kubeedge/edgemesh/pkg/apis/config/defaults"
+	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
+	discoverypb "github.com/kubeedge/edgemesh/pkg/tunnel/pb/discovery"
+	proxypb "github.com/kubeedge/edgemesh/pkg/tunnel/pb/proxy"
+	netutil "github.com/kubeedge/edgemesh/pkg/util/net"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p-kad-dht/dual"
 	p2phost "github.com/libp2p/go-libp2p/core/host"
@@ -20,19 +30,11 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
-	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
-	"github.com/libp2p/go-msgio/protoio"
 	ma "github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/yaml"
-
-	"github.com/kubeedge/edgemesh/pkg/apis/config/defaults"
-	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
-	discoverypb "github.com/kubeedge/edgemesh/pkg/tunnel/pb/discovery"
-	proxypb "github.com/kubeedge/edgemesh/pkg/tunnel/pb/proxy"
-	netutil "github.com/kubeedge/edgemesh/pkg/util/net"
 )
 
 const (
@@ -257,6 +259,7 @@ func (t *EdgeTunnel) GetRouteStream(opts ProxyOptions) (*StreamConn, error) {
 
 	//destName = path[0]
 	// generate the next dest-node information
+
 	destID, exists := t.nodePeerMap[destName]
 	if !exists {
 		destID, err = PeerIDFromString(destName)
@@ -372,12 +375,41 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 	}
 	msg.Reset()
 
-	streamConn := NewStreamConn(stream)
+	// 尝试在这里读取 stream 中的数据，然后关闭
+	allData, err := readAll(stream)
+	if err != nil {
+		klog.Errorf("[route]: Read data error: %v", err)
+		return
+	}
+	klog.Info("[route]: Read data: ", allData)
+
+	// 返回一个报文，表示成功收到了
+	msgStr := `HTTP/1.0 200 OK
+Content-Type: text/plain
+Content-Length: 16
+
+Hello, my friend
+`
+
+	_, err = stream.Write([]byte(msgStr))
+	if err != nil {
+		klog.Errorf("[route]: Write data error: %v", err)
+		return
+	}
+	err = stream.Close()
+	if err != nil {
+		klog.Errorf("[route]: Close stream error: %v", err)
+		return
+	}
+
+	// streamConn := NewStreamConn(stream)
+
+	streamConn := NewRouteConn(allData)
 	switch targetProto {
 	case TCP:
-		go netutil.ProxyConn(streamConn, proxyConn)
+		go netutil.RouteConn(streamConn, proxyConn)
 	case UDP:
-		go netutil.ProxyConnUDP(streamConn, proxyConn.(*net.UDPConn))
+		klog.Infoln("[route]: UDP is not completed")
 	}
 	klog.Infof("[route]: Success proxy for {%s %s %s}", targetProto, targetNode, targetAddr)
 }
@@ -839,4 +871,22 @@ func (t *EdgeTunnel) Run() {
 	go t.runDhtDiscovery()
 	go t.runConfigWatcher()
 	t.runHeartbeat()
+}
+
+func readAll(s network.Stream) (string, error) {
+	buf := bufio.NewReader(s)
+	var sb strings.Builder
+	for {
+		str, err := buf.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(str)
+		if len(str) < buf.Size() {
+			break
+		}
+	}
+	result := sb.String()
+	log.Printf("read: %s", result)
+	return result, nil
 }

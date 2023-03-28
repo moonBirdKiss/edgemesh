@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"k8s.io/klog/v2"
 	"net"
 	"net/http"
 	"sync"
 	"time"
-
-	"k8s.io/klog/v2"
 )
 
 // HttpRequestToBytes transforms http.Request to bytes
@@ -25,12 +24,38 @@ func HttpRequestToBytes(req *http.Request) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func RouteConn(in, out io.ReadWriteCloser) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go RouteCopyBytes("from backend", in, out, &wg)
+	go RouteCopyBytes("to backend", out, in, &wg)
+	wg.Wait()
+}
+
+func RouteCopyBytes(direction string, dest, src io.ReadWriteCloser, wg *sync.WaitGroup) {
+	defer wg.Done()
+	klog.Info("[route]: Copying remote address bytes")
+	n, err := io.Copy(dest, src)
+	if err != nil {
+		if !IsClosedError(err) && !IsStreamResetError(err) {
+			klog.ErrorS(err, "I/O error occurred")
+		}
+	}
+	klog.Info("Copied remote address bytes .", "bytes: ", n, "direction: ", direction)
+	if err = dest.Close(); err != nil && !IsClosedError(err) {
+		klog.ErrorS(err, "dest close failed")
+	}
+	if err = src.Close(); err != nil && !IsClosedError(err) {
+		klog.ErrorS(err, "src close failed")
+	}
+}
+
 // ProxyConn proxies data bi-directionally between in and out.
 func ProxyConn(in, out net.Conn) {
 	var wg sync.WaitGroup
 	wg.Add(2)
-	klog.V(4).InfoS("Creating proxy between remote and local addresses",
-		"inRemoteAddress", in.RemoteAddr(), "inLocalAddress", in.LocalAddr(), "outLocalAddress", out.LocalAddr(), "outRemoteAddress", out.RemoteAddr())
+	klog.Info("Creating proxy between remote and local addresses", "inRemoteAddress", in.RemoteAddr(),
+		"inLocalAddress", in.LocalAddr(), "outLocalAddress", out.LocalAddr(), "outRemoteAddress", out.RemoteAddr())
 	go copyBytes("from backend", in, out, &wg)
 	go copyBytes("to backend", out, in, &wg)
 	wg.Wait()
