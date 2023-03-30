@@ -27,8 +27,8 @@ func HttpRequestToBytes(req *http.Request) ([]byte, error) {
 func RouteConn(in, out io.ReadWriteCloser) {
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go RouteCopyBytes("from backend", in, out, &wg)
-	go RouteCopyBytes("to backend", out, in, &wg)
+	go RouteCopyBytes("from out to in", in, out, &wg)
+	go RouteCopyBytes("from in to out", out, in, &wg)
 	wg.Wait()
 }
 
@@ -41,10 +41,45 @@ func RouteCopyBytes(direction string, dest, src io.ReadWriteCloser, wg *sync.Wai
 			klog.ErrorS(err, "I/O error occurred")
 		}
 	}
-	klog.Info("Copied remote address bytes .", "bytes: ", n, "direction: ", direction)
+	klog.Info("Copied remote address bytes.", "bytes: ", n, " direction: ", direction)
 	if err = dest.Close(); err != nil && !IsClosedError(err) {
 		klog.ErrorS(err, "dest close failed")
 	}
+	if err = src.Close(); err != nil && !IsClosedError(err) {
+		klog.ErrorS(err, "src close failed")
+	}
+}
+
+func RouteCopyStream(dest, src io.ReadWriteCloser) {
+	klog.Info("[RouteCopyStream]: Copying remote address bytes")
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		n, err := io.Copy(dest, src)
+		if err != nil {
+			if !IsClosedError(err) && !IsStreamResetError(err) {
+				klog.ErrorS(err, "I/O error occurred")
+			}
+		}
+		klog.Info("[RouteCopyStream]: Copied remote address bytes.", "bytes: ", n)
+		wg.Done()
+	}()
+
+	// before the src is closed, we should send the correct msg back to the client
+	// 返回一个报文，表示成功收到了
+	msgStr := `HTTP/1.0 200 OK
+Content-Type: text/plain
+Content-Length: 16
+
+Hello, my friend
+`
+	_, err := src.Write([]byte(msgStr))
+	if err != nil {
+		klog.Errorf("[RouteStream]: Write data error: %v", err)
+		return
+	}
+
+	wg.Wait()
 	if err = src.Close(); err != nil && !IsClosedError(err) {
 		klog.ErrorS(err, "src close failed")
 	}
