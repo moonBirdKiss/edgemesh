@@ -261,14 +261,16 @@ func (t *EdgeTunnel) GetRouteStream(opts RouteProxyOptions) (*StreamConn, error)
 
 	klog.Info("[route]: starting to query the dst path, destName: ", destName)
 	path, err := t.routeTable.query(destName)
+
 	if err != nil || len(path) == 0 {
 		return nil, fmt.Errorf("[route]: failed to get the route path: %v", path)
 	}
+
 	klog.Info("[route]: the route path is ", path)
 
 	destName = path[0]
-	// generate the next dest-node information
 
+	// generate the next dest-node information
 	destID, exists := t.nodePeerMap[destName]
 	if !exists {
 		destID, err = PeerIDFromString(destName)
@@ -282,6 +284,7 @@ func (t *EdgeTunnel) GetRouteStream(opts RouteProxyOptions) (*StreamConn, error)
 	} else {
 		destInfo = t.p2pHost.Peerstore().PeerInfo(destID)
 	}
+
 	if err = AddCircuitAddrsToPeer(&destInfo, t.relayMap); err != nil {
 		return nil, fmt.Errorf("[route]: failed to add circuit addrs to peer %s", destInfo)
 	}

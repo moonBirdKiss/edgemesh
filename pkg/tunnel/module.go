@@ -28,6 +28,7 @@ import (
 
 // Agent expose the tunnel ability.  TODO convert var to func
 var Agent *EdgeTunnel
+var NodeHost []ma.Multiaddr
 
 // EdgeTunnel is used for solving cross subset communication
 type EdgeTunnel struct {
@@ -181,6 +182,7 @@ func newEdgeTunnel(c *v1alpha1.EdgeTunnelConfig) (*EdgeTunnel, error) {
 		return nil, fmt.Errorf("failed to new p2p host: %w", err)
 	}
 	klog.V(0).Infof("I'm %s\n", fmt.Sprintf("{%v: %v}", h.ID(), h.Addrs()))
+	NodeHost = h.Addrs()
 
 	// If this host is a relay node, we need to run libp2p relayv2 service
 	var relayService *relayv2.Relay
@@ -253,6 +255,12 @@ func newEdgeTunnel(c *v1alpha1.EdgeTunnelConfig) (*EdgeTunnel, error) {
 	}
 
 	edgeTunnel.routeTable.initTable()
+
+	// update route table
+	err = edgeTunnel.routeTable.updateTable()
+	if err != nil {
+		klog.Infof("Fail to update route table: ", err)
+	}
 
 	// run relay finder
 	go edgeTunnel.runRelayFinder(ddht, peerSource, time.Duration(c.FinderPeriod)*time.Second)

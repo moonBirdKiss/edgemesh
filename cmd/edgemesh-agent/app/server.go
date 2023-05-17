@@ -25,7 +25,6 @@ import (
 	netutil "github.com/kubeedge/edgemesh/pkg/util/net"
 	kubeedgeutil "github.com/kubeedge/kubeedge/pkg/util"
 	"github.com/kubeedge/kubeedge/pkg/util/flag"
-	"github.com/kubeedge/kubeedge/pkg/version"
 	"github.com/kubeedge/kubeedge/pkg/version/verflag"
 )
 
@@ -53,7 +52,7 @@ func NewEdgeMeshAgentCommand() *cobra.Command {
 				klog.Exit(kubeedgeutil.SpliceErrors(errs.ToAggregate().Errors()))
 			}
 
-			klog.Infof("The function of Store and forward is completed . Version: %+v", version.Get())
+			klog.Infof("Trying to merge. I am trying")
 			if err = Run(cfg); err != nil {
 				klog.Exit("run edgemesh-agent failed: ", err)
 			}
