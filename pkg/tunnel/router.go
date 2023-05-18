@@ -29,7 +29,7 @@ type RouteTable struct {
 
 const (
 	TableSize  = 10
-	url_suffix = ":5000/sat-route-update"
+	url_suffix = ":8000/sat-route-update"
 	url_prefix = "http://"
 )
 
@@ -54,9 +54,16 @@ func (r *RouteTable) initTable() {
 	r.table["edge-1"] = hostname + "," + "edge-1"
 	r.table["edge-2"] = hostname + "," + "edge-2"
 	r.table["edge-3"] = hostname + "," + "edge-3"
+
+	// current, we only use these nodes
 	r.table["edge-4"] = hostname + "," + "edge-4"
 	r.table["edge-5"] = hostname + "," + "edge-5"
 	r.table["edge-6"] = hostname + "," + "edge-6"
+
+	r.table["master"] = hostname + "," + "master"
+
+	// init the host path
+	r.table[hostname] = hostname
 
 	// init url
 	hostURL, err := getHostIP(NodeHost[0].String())

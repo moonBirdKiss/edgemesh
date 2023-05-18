@@ -1,7 +1,6 @@
 package tunnel
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
@@ -268,7 +267,8 @@ func (t *EdgeTunnel) GetRouteStream(opts RouteProxyOptions) (*StreamConn, error)
 
 	klog.Info("[route]: the route path is ", path)
 
-	destName = path[0]
+	// the path[0] is the current node, and the path[1] is the next node
+	destName = path[1]
 
 	// generate the next dest-node information
 	destID, exists := t.nodePeerMap[destName]
@@ -297,10 +297,7 @@ func (t *EdgeTunnel) GetRouteStream(opts RouteProxyOptions) (*StreamConn, error)
 	klog.Infof("[route]: New stream between peer %s: %s success", destName, destInfo)
 	// defer stream.Close() // will close the stream elsewhere
 
-	streamWriter := protoio.NewDelimitedWriter(stream)
-	streamReader := protoio.NewDelimitedReader(stream, MaxReadSize)
-
-	restPath := strings.Join(path[1:], ",")
+	restPath := strings.Join(path[2:], ",")
 
 	// handshake with dest peer
 	msg := &proxypb.Proxy{
@@ -312,23 +309,9 @@ func (t *EdgeTunnel) GetRouteStream(opts RouteProxyOptions) (*StreamConn, error)
 		Path:     &restPath,
 		Status:   &opts.Status,
 	}
-	if err = streamWriter.WriteMsg(msg); err != nil {
-		resetErr := stream.Reset()
-		if resetErr != nil {
-			return nil, fmt.Errorf("[route]: stream between %s reset err: %w", destName, resetErr)
-		}
-		return nil, fmt.Errorf("[route]: write conn msg to %s err: %w", destName, err)
-	}
 
-	// read response
-	msg.Reset()
-	if err = streamReader.ReadMsg(msg); err != nil {
-		resetErr := stream.Reset()
-		if resetErr != nil {
-			return nil, fmt.Errorf("[route]: stream between %s reset err: %w", destName, resetErr)
-		}
-		return nil, fmt.Errorf("[route]: read conn result msg from %s err: %w", destName, err)
-	}
+	// shake hands with peer
+	msg, err = StreamShakeHandsSnd(stream, msg)
 	if msg.GetType() == proxypb.Proxy_FAILED {
 		resetErr := stream.Reset()
 		if resetErr != nil {
@@ -336,10 +319,8 @@ func (t *EdgeTunnel) GetRouteStream(opts RouteProxyOptions) (*StreamConn, error)
 		}
 		return nil, fmt.Errorf("libp2p dial %s err: Proxy.type is %s", destName, msg.GetType())
 	}
-
-	klog.Infof("[route]: read a handshake: %v", msg)
-
 	msg.Reset()
+
 	klog.Infof("[route]: Success proxy for {%s %s %s %s}", opts.Protocol, destName, opts.NodeName, opts.Port)
 	return NewStreamConn(stream), nil
 }
@@ -501,7 +482,11 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 	// streamConn := NewStreamConn(stream)
 	switch targetProto {
 	case TCP:
-		go netutil.RouteConn(tmpStream, proxyConn)
+		go func() {
+			netutil.RouteConn(tmpStream, proxyConn)
+			klog.Infof("[route]: Return data: %s", tmpStream.String())
+		}()
+
 	case UDP:
 		klog.Infoln("[route]: UDP is not completed")
 	}
@@ -967,19 +952,27 @@ func (t *EdgeTunnel) Run() {
 	t.runHeartbeat()
 }
 
-func readAll(s network.Stream) (string, error) {
-	buf := bufio.NewReader(s)
-	var sb strings.Builder
-	for {
-		str, err := buf.ReadString('\n')
-		if err != nil {
-			return "", err
+func StreamShakeHandsSnd(stream network.Stream, msg *proxypb.Proxy) (*proxypb.Proxy, error) {
+	streamWriter := protoio.NewDelimitedWriter(stream)
+	streamReader := protoio.NewDelimitedReader(stream, MaxReadSize)
+	if err := streamWriter.WriteMsg(msg); err != nil {
+		resetErr := stream.Reset()
+		if resetErr != nil {
+			return nil, fmt.Errorf("[route]: stream between %s reset err: %w", msg.NodeName, resetErr)
 		}
-		sb.WriteString(str)
-		if len(str) < buf.Size() {
-			break
-		}
+		return nil, fmt.Errorf("[route]: write conn msg to %s err: %w", msg.NodeName, err)
 	}
-	result := sb.String()
-	return result, nil
+
+	// read response
+	msg.Reset()
+	if err := streamReader.ReadMsg(msg); err != nil {
+		resetErr := stream.Reset()
+		if resetErr != nil {
+			return nil, fmt.Errorf("[route]: stream between %s reset err: %w", msg.NodeName, resetErr)
+		}
+		return nil, fmt.Errorf("[route]: read conn result msg from %s err: %w", msg.NodeName, err)
+	}
+
+	klog.Infof("[shakeHands]: read a handshake: %v", msg)
+	return msg, nil
 }
