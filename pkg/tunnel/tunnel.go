@@ -311,7 +311,19 @@ func (t *EdgeTunnel) GetRouteStream(opts RouteProxyOptions) (*StreamConn, error)
 	}
 
 	// shake hands with peer
-	msg, err = StreamShakeHandsSnd(stream, msg)
+	err = StreamShakeHandsSnd(stream, msg)
+	if err != nil {
+		klog.Errorf("[router]: Fail to snd shake hands msg: %v", err)
+		return nil, err
+	}
+
+	// receive the response from the dest peer
+	msg, err = StreamShakeHandsRcv(stream)
+	if err != nil {
+		klog.Errorf("[router]: Fail to rcv shake hands msg: %v", err)
+		return nil, err
+	}
+
 	if msg.GetType() == proxypb.Proxy_FAILED {
 		resetErr := stream.Reset()
 		if resetErr != nil {
@@ -332,23 +344,18 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 	}
 	klog.Infof("[route]: Proxy service got a new stream from %s", remotePeer)
 
-	streamWriter := protoio.NewDelimitedWriter(stream)
-	streamReader := protoio.NewDelimitedReader(stream, MaxReadSize) // TODO get maxSize from default
-
-	// read handshake
-	msg := new(proxypb.Proxy)
-	err := streamReader.ReadMsg(msg)
+	msg, err := StreamShakeHandsRcv(stream)
 	if err != nil {
-		klog.Errorf("[route]: Read msg from %s err: %v", remotePeer, err)
+		klog.Errorf("Fail to recv msg from stream: %v", err)
 		return
 	}
 	if msg.GetType() != proxypb.Proxy_CONNECT {
 		klog.Errorf("[route]: Read msg from %s type should be CONNECT", remotePeer)
 		return
 	}
-
 	klog.Infof("[route]: read msg: %v", msg)
 
+	// prepare the msg
 	targetProto := msg.GetProtocol()
 	targetNode := msg.GetNodeName()
 	targetIP := msg.GetIp()
@@ -357,17 +364,16 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 	targetAddr := fmt.Sprintf("%s:%d:%s", targetIP, targetPort, targetPath)
 
 	// write response
+	msg.Reset()
 	msg.Type = proxypb.Proxy_SUCCESS.Enum()
 
 	var msgStatus int32 = 100
 	msg.Status = &msgStatus
 
-	err = streamWriter.WriteMsg(msg)
+	err = StreamShakeHandsSnd(stream, msg)
 	if err != nil {
 		klog.Errorf("[route]: Write msg to %s err: %v", remotePeer, err)
-		return
 	}
-	msg.Reset()
 
 	// 尝试在这里读取 stream 中的数据，然后关闭
 	tmpStream := NewRouteConn()
@@ -413,8 +419,8 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 		klog.Infof("[route]: New relayStream between peer %s: %s success", destName, destInfo)
 		// defer relayStream.Close() // will close the relayStream elsewhere
 
-		relayStreamWriter := protoio.NewDelimitedWriter(relayStream)
-		relayStreamReader := protoio.NewDelimitedReader(relayStream, MaxReadSize)
+		//relayStreamWriter := protoio.NewDelimitedWriter(relayStream)
+		//relayStreamReader := protoio.NewDelimitedReader(relayStream, MaxReadSize)
 
 		restPath := strings.Join(path[1:], ",")
 
@@ -428,7 +434,17 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 			Path:     &restPath,
 			Status:   &msgStatus,
 		}
-		if err = relayStreamWriter.WriteMsg(relayMsg); err != nil {
+
+		//if err = relayStreamWriter.WriteMsg(relayMsg); err != nil {
+		//	resetErr := relayStream.Reset()
+		//	if resetErr != nil {
+		//		klog.Infof("[route]: relayStream between %s reset err: %w", targetNode, resetErr)
+		//		return
+		//	}
+		//	klog.Infof("[route]: write conn relayMsg to %s err: %w", targetNode, err)
+		//	return
+		//}
+		if err = StreamShakeHandsSnd(relayStream, relayMsg); err != nil {
 			resetErr := relayStream.Reset()
 			if resetErr != nil {
 				klog.Infof("[route]: relayStream between %s reset err: %w", targetNode, resetErr)
@@ -440,7 +456,9 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 
 		// read response
 		relayMsg.Reset()
-		if err = relayStreamReader.ReadMsg(relayMsg); err != nil {
+		relayMsg, err = StreamShakeHandsRcv(relayStream)
+
+		if err != nil {
 			resetErr := relayStream.Reset()
 			if resetErr != nil {
 				klog.Infof("[route]: relayStream between %s reset err: %w", targetNode, resetErr)
@@ -471,7 +489,8 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 			klog.Errorf("l4 proxy connect to %v err: %v", msg, err)
 			msg.Reset()
 			msg.Type = proxypb.Proxy_FAILED.Enum()
-			if err = streamWriter.WriteMsg(msg); err != nil {
+			err = StreamShakeHandsSnd(stream, msg)
+			if err != nil {
 				klog.Errorf("Write msg to %s err: %v", remotePeer, err)
 				return
 			}
@@ -952,27 +971,39 @@ func (t *EdgeTunnel) Run() {
 	t.runHeartbeat()
 }
 
-func StreamShakeHandsSnd(stream network.Stream, msg *proxypb.Proxy) (*proxypb.Proxy, error) {
+func StreamShakeHandsSnd(stream network.Stream, msg *proxypb.Proxy) error {
 	streamWriter := protoio.NewDelimitedWriter(stream)
-	streamReader := protoio.NewDelimitedReader(stream, MaxReadSize)
 	if err := streamWriter.WriteMsg(msg); err != nil {
 		resetErr := stream.Reset()
 		if resetErr != nil {
-			return nil, fmt.Errorf("[route]: stream between %s reset err: %w", msg.NodeName, resetErr)
+			return fmt.Errorf("[route]: stream between %s reset err: %w", msg.NodeName, resetErr)
 		}
-		return nil, fmt.Errorf("[route]: write conn msg to %s err: %w", msg.NodeName, err)
+		return fmt.Errorf("[route]: write conn msg to %s err: %w", msg.NodeName, err)
 	}
-
-	// read response
+	// after snd, we should reset the msg
 	msg.Reset()
-	if err := streamReader.ReadMsg(msg); err != nil {
-		resetErr := stream.Reset()
-		if resetErr != nil {
-			return nil, fmt.Errorf("[route]: stream between %s reset err: %w", msg.NodeName, resetErr)
-		}
-		return nil, fmt.Errorf("[route]: read conn result msg from %s err: %w", msg.NodeName, err)
-	}
+	return nil
 
-	klog.Infof("[shakeHands]: read a handshake: %v", msg)
+	//if err := streamReader.ReadMsg(msg); err != nil {
+	//	resetErr := stream.Reset()
+	//	if resetErr != nil {
+	//		return nil, fmt.Errorf("[route]: stream between %s reset err: %w", msg.NodeName, resetErr)
+	//	}
+	//	return nil, fmt.Errorf("[route]: read conn result msg from %s err: %w", msg.NodeName, err)
+	//}
+	//
+	//klog.Infof("[shakeHands]: read a handshake: %v", msg)
+	//return msg, nil
+}
+
+func StreamShakeHandsRcv(stream network.Stream) (*proxypb.Proxy, error) {
+	streamReader := protoio.NewDelimitedReader(stream, MaxReadSize) // TODO get maxSize from default
+
+	// read handshake
+	msg := new(proxypb.Proxy)
+	err := streamReader.ReadMsg(msg)
+	if err != nil {
+		return nil, err
+	}
 	return msg, nil
 }
