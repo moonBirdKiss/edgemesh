@@ -376,7 +376,8 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 	}
 
 	// 尝试在这里读取 stream 中的数据，然后关闭
-	tmpStream := NewRouteConn()
+	tmpStream := netutil.NewRouteConnection()
+	klog.Infof("[route]: Try to Read data")
 	netutil.RouteCopyStream(tmpStream, stream)
 	klog.Infof("[route]: Read data: %s", tmpStream.String())
 
@@ -384,6 +385,7 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 	if targetPath != "" {
 		path = strings.Split(targetPath, ",")
 	}
+	klog.Info("[route]: Path: ", path, "len(path): ", len(path))
 
 	var proxyConn io.ReadWriteCloser
 	if len(path) != 0 {
@@ -484,6 +486,7 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 		proxyConn = NewStreamConn(relayStream)
 	} else {
 		// 这里应该是最后一跳的处理流程
+		klog.Infoln("[route]: the final hop: ", targetProto, targetIP)
 		proxyConn, err = tryDialEndpoint(targetProto, targetIP, int(targetPort))
 		if err != nil {
 			klog.Errorf("l4 proxy connect to %v err: %v", msg, err)
@@ -503,7 +506,7 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 	case TCP:
 		go func() {
 			netutil.RouteConn(tmpStream, proxyConn)
-			klog.Infof("[route]: Return data: %s", tmpStream.String())
+			// klog.Infof("[route]: Return data: %s", tmpStream.String())
 		}()
 
 	case UDP:

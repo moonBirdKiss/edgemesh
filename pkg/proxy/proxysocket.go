@@ -93,6 +93,8 @@ func (tcp *tcpProxySocket) ProxyLoop(service proxy.ServicePortName, myInfo *user
 			continue
 		}
 		klog.V(3).InfoS("Accepted TCP connection from remote", "remoteAddress", inConn.RemoteAddr(), "localAddress", inConn.LocalAddr())
+
+		klog.Infoln("We should close inConn here")
 		outConn, err := internalLoadBalancer.TryConnectEndpoints(service, inConn.RemoteAddr(), "tcp", inConn, nil)
 		if err != nil {
 			klog.ErrorS(err, "Failed to connect to balancer")

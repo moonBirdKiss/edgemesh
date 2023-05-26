@@ -748,10 +748,6 @@ func (lb *LoadBalancer) dialRouteEndpoint(protocol, endpoint string) (net.Conn, 
 			return nil, fmt.Errorf("invalid endpoint %s", endpoint)
 		}
 
-		// modify the routeProxyOpts
-
-		// query the path:
-
 		proxyOpts := tunnel.RouteProxyOptions{
 			Protocol: protocol,
 			NodeName: targetNode,
