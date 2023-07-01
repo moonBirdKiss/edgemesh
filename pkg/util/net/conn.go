@@ -235,6 +235,7 @@ func copyBuffer(dst io.Writer, src io.Reader, buf []byte, direction string) (wri
 		klog.Infof("[copyBuffer]: %s start to read, index: %d", direction, i)
 		nr, er := src.Read(buf)
 		klog.Infof("[copyBuffer]: %s end to read, index: %d, size: %d ", direction, i, nr)
+		klog.Infof("[copyBuffer]: the data: \n %s", buf)
 		if nr > 0 {
 			nw, ew := dst.Write(buf[0:nr])
 			if nw < 0 || nr < nw {

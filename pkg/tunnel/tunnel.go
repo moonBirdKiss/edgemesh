@@ -258,14 +258,14 @@ func (t *EdgeTunnel) GetRouteStream(opts RouteProxyOptions) (*StreamConn, error)
 
 	destName := opts.NodeName
 
-	klog.Info("[route]: starting to query the dst path, destName: ", destName)
+	klog.Info("[GetRouteStream]: starting to query the dst path, destName: ", destName)
 	path, err := t.routeTable.query(destName)
 
 	if err != nil || len(path) == 0 {
 		return nil, fmt.Errorf("[route]: failed to get the route path: %v", path)
 	}
 
-	klog.Info("[route]: the route path is ", path)
+	klog.Info("[GetRouteStream]: the route path is ", path)
 
 	// the path[0] is the current node, and the path[1] is the next node
 	destName = path[1]
@@ -279,22 +279,22 @@ func (t *EdgeTunnel) GetRouteStream(opts RouteProxyOptions) (*StreamConn, error)
 		}
 		destInfo = peer.AddrInfo{ID: destID, Addrs: []ma.Multiaddr{}}
 		// mapping nodeName and peerID
-		klog.Infof("[route]: Could not find peer %s in cache, auto generate peer info: %s", destName, destInfo)
+		klog.Infof("[GetRouteStream]: Could not find peer %s in cache, auto generate peer info: %s", destName, destInfo)
 		t.nodePeerMap[destName] = destID
 	} else {
 		destInfo = t.p2pHost.Peerstore().PeerInfo(destID)
 	}
 
 	if err = AddCircuitAddrsToPeer(&destInfo, t.relayMap); err != nil {
-		return nil, fmt.Errorf("[route]: failed to add circuit addrs to peer %s", destInfo)
+		return nil, fmt.Errorf("[GetRouteStream]: failed to add circuit addrs to peer %s", destInfo)
 	}
 	t.p2pHost.Peerstore().AddAddrs(destInfo.ID, destInfo.Addrs, peerstore.PermanentAddrTTL)
 
 	stream, err := t.p2pHost.NewStream(network.WithUseTransient(t.hostCtx, "relay"), destID, defaults.RouteProtocol)
 	if err != nil {
-		return nil, fmt.Errorf("[route]: new stream between %s: %s err: %w", destName, destInfo, err)
+		return nil, fmt.Errorf("[GetRouteStream]: new stream between %s: %s err: %w", destName, destInfo, err)
 	}
-	klog.Infof("[route]: New stream between peer %s: %s success", destName, destInfo)
+	klog.Infof("[GetRouteStream]: New stream between peer %s: %s success", destName, destInfo)
 	// defer stream.Close() // will close the stream elsewhere
 
 	restPath := strings.Join(path[2:], ",")
@@ -310,18 +310,25 @@ func (t *EdgeTunnel) GetRouteStream(opts RouteProxyOptions) (*StreamConn, error)
 		Status:   &opts.Status,
 	}
 
-	// shake hands with peer
-	err = StreamShakeHandsSnd(stream, msg)
-	if err != nil {
-		klog.Errorf("[router]: Fail to snd shake hands msg: %v", err)
-		return nil, err
+	streamWriter := protoio.NewDelimitedWriter(stream)
+	streamReader := protoio.NewDelimitedReader(stream, MaxReadSize)
+
+	if err = streamWriter.WriteMsg(msg); err != nil {
+		resetErr := stream.Reset()
+		if resetErr != nil {
+			return nil, fmt.Errorf("[GetRouteStream]: stream between %s reset err: %w", destName, resetErr)
+		}
+		return nil, fmt.Errorf("[GetRouteStream]: write conn msg to %s err: %w", destName, err)
 	}
 
-	// receive the response from the dest peer
-	msg, err = StreamShakeHandsRcv(stream)
-	if err != nil {
-		klog.Errorf("[router]: Fail to rcv shake hands msg: %v", err)
-		return nil, err
+	// read response
+	msg.Reset()
+	if err = streamReader.ReadMsg(msg); err != nil {
+		resetErr := stream.Reset()
+		if resetErr != nil {
+			return nil, fmt.Errorf("[GetRouteStream]: stream between %s reset err: %w", destName, resetErr)
+		}
+		return nil, fmt.Errorf("[GetRouteStream]: read conn result msg from %s err: %w", destName, err)
 	}
 
 	if msg.GetType() == proxypb.Proxy_FAILED {
@@ -333,7 +340,7 @@ func (t *EdgeTunnel) GetRouteStream(opts RouteProxyOptions) (*StreamConn, error)
 	}
 	msg.Reset()
 
-	klog.Infof("[route]: Success proxy for {%s %s %s %s}", opts.Protocol, destName, opts.NodeName, opts.Port)
+	klog.Infof("[GetRouteStream]: Success proxy for {%s %s %s %s}", opts.Protocol, destName, opts.NodeName, opts.Port)
 	return NewStreamConn(stream), nil
 }
 
@@ -344,7 +351,12 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 	}
 	klog.Infof("[route]: Proxy service got a new stream from %s", remotePeer)
 
-	msg, err := StreamShakeHandsRcv(stream)
+	streamWriter := protoio.NewDelimitedWriter(stream)
+	streamReader := protoio.NewDelimitedReader(stream, MaxReadSize) // TODO get maxSize from default
+
+	msg := new(proxypb.Proxy)
+	err := streamReader.ReadMsg(msg)
+
 	if err != nil {
 		klog.Errorf("Fail to recv msg from stream: %v", err)
 		return
@@ -370,10 +382,12 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 	var msgStatus int32 = 100
 	msg.Status = &msgStatus
 
-	err = StreamShakeHandsSnd(stream, msg)
+	err = streamWriter.WriteMsg(msg)
 	if err != nil {
 		klog.Errorf("[route]: Write msg to %s err: %v", remotePeer, err)
+		return
 	}
+	msg.Reset()
 
 	// 尝试在这里读取 stream 中的数据，然后关闭
 	tmpStream := netutil.NewRouteConnection()
@@ -388,119 +402,26 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 	klog.Info("[route]: Path: ", path, "len(path): ", len(path))
 
 	var proxyConn io.ReadWriteCloser
-	if len(path) != 0 {
-		klog.Infof("[route]: the relayMsg should be routing.")
-		// 这里应该是中间节点的处理流程
-		var destInfo peer.AddrInfo
-		destName := path[0]
-		destID, exists := t.nodePeerMap[destName]
-		if !exists {
-			destID, err = PeerIDFromString(destName)
-			if err != nil {
-				klog.Infoln("[route]: Could not find peer %s in cache", destName)
-				return
-			}
-			destInfo = peer.AddrInfo{ID: destID, Addrs: []ma.Multiaddr{}}
-			// mapping nodeName and peerID
-			klog.Infof("[route]: Could not find peer %s in cache, auto generate peer info: %s", destName, destInfo)
-			t.nodePeerMap[destName] = destID
-		} else {
-			destInfo = t.p2pHost.Peerstore().PeerInfo(destID)
-		}
-		if err = AddCircuitAddrsToPeer(&destInfo, t.relayMap); err != nil {
-			klog.Infof("[route]: failed to add circuit addrs to peer %s", destInfo)
+	proxyConn, err = tryDialEndpoint(targetProto, targetIP, int(targetPort))
+	if err != nil {
+		klog.Errorf("l4 proxy connect to %v err: %v", msg, err)
+		msg.Reset()
+		msg.Type = proxypb.Proxy_FAILED.Enum()
+		if err = streamWriter.WriteMsg(msg); err != nil {
+			klog.Errorf("Write msg to %s err: %v", remotePeer, err)
 			return
 		}
-		t.p2pHost.Peerstore().AddAddrs(destInfo.ID, destInfo.Addrs, peerstore.PermanentAddrTTL)
-
-		relayStream, err := t.p2pHost.NewStream(network.WithUseTransient(t.hostCtx, "relay"), destID, defaults.RouteProtocol)
-		if err != nil {
-			klog.Infof("[route]: new relayStream between %s: %s err: %w", destName, destInfo, err)
-			return
-		}
-		klog.Infof("[route]: New relayStream between peer %s: %s success", destName, destInfo)
-		// defer relayStream.Close() // will close the relayStream elsewhere
-
-		//relayStreamWriter := protoio.NewDelimitedWriter(relayStream)
-		//relayStreamReader := protoio.NewDelimitedReader(relayStream, MaxReadSize)
-
-		restPath := strings.Join(path[1:], ",")
-
-		// handshake with dest peer
-		relayMsg := &proxypb.Proxy{
-			Type:     proxypb.Proxy_CONNECT.Enum(),
-			Protocol: &targetProto,
-			NodeName: &targetNode,
-			Ip:       &targetIP,
-			Port:     &targetPort,
-			Path:     &restPath,
-			Status:   &msgStatus,
-		}
-
-		//if err = relayStreamWriter.WriteMsg(relayMsg); err != nil {
-		//	resetErr := relayStream.Reset()
-		//	if resetErr != nil {
-		//		klog.Infof("[route]: relayStream between %s reset err: %w", targetNode, resetErr)
-		//		return
-		//	}
-		//	klog.Infof("[route]: write conn relayMsg to %s err: %w", targetNode, err)
-		//	return
-		//}
-		if err = StreamShakeHandsSnd(relayStream, relayMsg); err != nil {
-			resetErr := relayStream.Reset()
-			if resetErr != nil {
-				klog.Infof("[route]: relayStream between %s reset err: %w", targetNode, resetErr)
-				return
-			}
-			klog.Infof("[route]: write conn relayMsg to %s err: %w", targetNode, err)
-			return
-		}
-
-		// read response
-		relayMsg.Reset()
-		relayMsg, err = StreamShakeHandsRcv(relayStream)
-
-		if err != nil {
-			resetErr := relayStream.Reset()
-			if resetErr != nil {
-				klog.Infof("[route]: relayStream between %s reset err: %w", targetNode, resetErr)
-				return
-			}
-			klog.Infof("[route]: read conn result relayMsg from %s err: %w", targetNode, err)
-			return
-		}
-		if relayMsg.GetType() == proxypb.Proxy_FAILED {
-			resetErr := relayStream.Reset()
-			if resetErr != nil {
-				klog.Infof("[route]: relayStream between %s reset err: %w", targetNode, err)
-				return
-			}
-			klog.Infof("[route]: libp2p dial err: Proxy.type is %s", relayMsg.GetType())
-			return
-		}
-
-		klog.Infof("[route]: read a handshake: %v", relayMsg)
-
-		relayMsg.Reset()
-		klog.Infof("[route]: libp2p dial %s success", targetNode)
-		proxyConn = NewStreamConn(relayStream)
-	} else {
-		// 这里应该是最后一跳的处理流程
-		klog.Infoln("[route]: the final hop: ", targetProto, targetIP)
-		proxyConn, err = tryDialEndpoint(targetProto, targetIP, int(targetPort))
-		if err != nil {
-			klog.Errorf("l4 proxy connect to %v err: %v", msg, err)
-			msg.Reset()
-			msg.Type = proxypb.Proxy_FAILED.Enum()
-			err = StreamShakeHandsSnd(stream, msg)
-			if err != nil {
-				klog.Errorf("Write msg to %s err: %v", remotePeer, err)
-				return
-			}
-			return
-		}
+		return
 	}
 
+	// write response
+	msg.Type = proxypb.Proxy_SUCCESS.Enum()
+	err = streamWriter.WriteMsg(msg)
+	if err != nil {
+		klog.Errorf("Write msg to %s err: %v", remotePeer, err)
+		return
+	}
+	msg.Reset()
 	// streamConn := NewStreamConn(stream)
 	switch targetProto {
 	case TCP:
@@ -974,39 +895,39 @@ func (t *EdgeTunnel) Run() {
 	t.runHeartbeat()
 }
 
-func StreamShakeHandsSnd(stream network.Stream, msg *proxypb.Proxy) error {
-	streamWriter := protoio.NewDelimitedWriter(stream)
-	if err := streamWriter.WriteMsg(msg); err != nil {
-		resetErr := stream.Reset()
-		if resetErr != nil {
-			return fmt.Errorf("[route]: stream between %s reset err: %w", msg.NodeName, resetErr)
-		}
-		return fmt.Errorf("[route]: write conn msg to %s err: %w", msg.NodeName, err)
-	}
-	// after snd, we should reset the msg
-	msg.Reset()
-	return nil
-
-	//if err := streamReader.ReadMsg(msg); err != nil {
-	//	resetErr := stream.Reset()
-	//	if resetErr != nil {
-	//		return nil, fmt.Errorf("[route]: stream between %s reset err: %w", msg.NodeName, resetErr)
-	//	}
-	//	return nil, fmt.Errorf("[route]: read conn result msg from %s err: %w", msg.NodeName, err)
-	//}
-	//
-	//klog.Infof("[shakeHands]: read a handshake: %v", msg)
-	//return msg, nil
-}
-
-func StreamShakeHandsRcv(stream network.Stream) (*proxypb.Proxy, error) {
-	streamReader := protoio.NewDelimitedReader(stream, MaxReadSize) // TODO get maxSize from default
-
-	// read handshake
-	msg := new(proxypb.Proxy)
-	err := streamReader.ReadMsg(msg)
-	if err != nil {
-		return nil, err
-	}
-	return msg, nil
-}
+//func StreamShakeHandsSnd(stream network.Stream, msg *proxypb.Proxy) error {
+//	streamWriter := protoio.NewDelimitedWriter(stream)
+//	if err := streamWriter.WriteMsg(msg); err != nil {
+//		resetErr := stream.Reset()
+//		if resetErr != nil {
+//			return fmt.Errorf("[route]: stream between %s reset err: %w", msg.NodeName, resetErr)
+//		}
+//		return fmt.Errorf("[route]: write conn msg to %s err: %w", msg.NodeName, err)
+//	}
+//	// after snd, we should reset the msg
+//	msg.Reset()
+//	return nil
+//
+//	//if err := streamReader.ReadMsg(msg); err != nil {
+//	//	resetErr := stream.Reset()
+//	//	if resetErr != nil {
+//	//		return nil, fmt.Errorf("[route]: stream between %s reset err: %w", msg.NodeName, resetErr)
+//	//	}
+//	//	return nil, fmt.Errorf("[route]: read conn result msg from %s err: %w", msg.NodeName, err)
+//	//}
+//	//
+//	//klog.Infof("[shakeHands]: read a handshake: %v", msg)
+//	//return msg, nil
+//}
+//
+//func StreamShakeHandsRcv(stream network.Stream) (*proxypb.Proxy, error) {
+//	streamReader := protoio.NewDelimitedReader(stream, MaxReadSize) // TODO get maxSize from default
+//
+//	// read handshake
+//	msg := new(proxypb.Proxy)
+//	err := streamReader.ReadMsg(msg)
+//	if err != nil {
+//		return nil, err
+//	}
+//	return msg, nil
+//}
