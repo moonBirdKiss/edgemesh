@@ -126,10 +126,9 @@ Hello, my friend
 
 // ProxyConn proxies data bi-directionally between in and out.
 func ProxyConn(in, out net.Conn) {
+	klog.Infof("[ProxyConn]: Start proxying data bi-directionally between in and out")
 	var wg sync.WaitGroup
 	wg.Add(2)
-	//klog.Info("Creating proxy between remote and local addresses", "inRemoteAddress", in.RemoteAddr(),
-	//	"inLocalAddress", in.LocalAddr(), "outLocalAddress", out.LocalAddr(), "outRemoteAddress", out.RemoteAddr())
 	go copyBytes("from backend", in, out, &wg)
 	go copyBytes("to backend", out, in, &wg)
 	wg.Wait()
@@ -137,23 +136,21 @@ func ProxyConn(in, out net.Conn) {
 
 func copyBytes(direction string, dest, src net.Conn, wg *sync.WaitGroup) {
 	defer wg.Done()
-	//klog.V(4).InfoS("Copying remote address bytes", "direction", direction, "sourceRemoteAddress", src.RemoteAddr(), "destinationRemoteAddress", dest.RemoteAddr())
-	klog.Infof("[copyBytes]: %s", direction)
-	n, err := copyBuffer(dest, src, nil, direction)
+	klog.Infoln("[CopyBytes]: Start direction: ", direction)
+	_, err := copyBuffer(dest, src, nil, direction)
+	klog.Infoln("[CopyBytes]: Finish direction: ", direction)
 	if err != nil {
 		if !IsClosedError(err) && !IsStreamResetError(err) {
 			klog.ErrorS(err, "I/O error occurred")
 		}
 	}
-	klog.Infof("[copyBytes]: %s, and the total bytes: %d", direction, n)
-	//klog.V(4).InfoS("Copied remote address bytes", "bytes", n, "direction", direction, "sourceRemoteAddress", src.RemoteAddr(), "destinationRemoteAddress", dest.RemoteAddr())
-	if err = dest.Close(); err != nil && !IsClosedError(err) {
-		klog.ErrorS(err, "dest close failed")
-	}
 	if err = src.Close(); err != nil && !IsClosedError(err) {
 		klog.ErrorS(err, "src close failed")
 	}
-	klog.Infof("[copyBytes]: %s successfully", direction)
+
+	if err = dest.Close(); err != nil && !IsClosedError(err) {
+		klog.ErrorS(err, "dest close failed")
+	}
 }
 
 func ProxyConnUDP(inConn net.Conn, udpConn *net.UDPConn) {
@@ -230,12 +227,12 @@ func copyBuffer(dst io.Writer, src io.Reader, buf []byte, direction string) (wri
 		buf = make([]byte, size)
 	}
 
-	klog.Infof("[copyBuffer]: %s start to copy buffer", direction)
+	//klog.Infof("[copyBuffer]: %s start to copy buffer", direction)
 	for i := 0; ; i++ {
-		klog.Infof("[copyBuffer]: %s start to read, index: %d", direction, i)
+		//klog.Infof("[copyBuffer]: %s start to read, index: %d", direction, i)
 		nr, er := src.Read(buf)
-		klog.Infof("[copyBuffer]: %s end to read, index: %d, size: %d ", direction, i, nr)
-		klog.Infof("[copyBuffer]: the data: \n %s", buf)
+		//klog.Infof("[copyBuffer]: %s end to read, index: %d, size: %d ", direction, i, nr)
+		//klog.Infof("[copyBuffer]: the data: \n %s", buf)
 		if nr > 0 {
 			nw, ew := dst.Write(buf[0:nr])
 			if nw < 0 || nr < nw {
@@ -264,8 +261,8 @@ func copyBuffer(dst io.Writer, src io.Reader, buf []byte, direction string) (wri
 			klog.Infoln(er)
 			break
 		}
-		klog.Infof("[copyBuffer] index: %d finished!", i)
+		//klog.Infof("[copyBuffer] index: %d finished!", i)
 	}
-	klog.Infof("[copyBuffer]: %s end to copy buffer, err: %v", direction, err)
+	//klog.Infof("[copyBuffer]: %s end to copy buffer, err: %v", direction, err)
 	return written, err
 }
