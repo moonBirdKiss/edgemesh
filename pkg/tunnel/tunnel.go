@@ -439,8 +439,26 @@ func (t *EdgeTunnel) routeStreamHandler(stream network.Stream) {
 	if len(path) != 0 {
 		klog.Infof("[route]: the relayMsg should be routing.")
 		// 这里应该是中间节点的处理流程
+		targetNode = path[len(path)-1]
+		// 此处也需要去query path
+		paths, err := t.routeTable.Query(targetNode)
+		if err != nil {
+			klog.Infoln("[routeHandler]: ", err)
+			for {
+				time.Sleep(time.Second * 10)
+				paths, err = t.routeTable.Query(targetNode)
+				if err == nil {
+					break
+				}
+			}
+		}
+
+		routePath := strings.Split(paths[0], ",")
+		// the path[0] is the current node, and the path[1] is the next node
+		destName := routePath[1]
+
 		var destInfo peer.AddrInfo
-		destName := path[0]
+		//destName := path[0]
 		destID, exists := t.nodePeerMap[destName]
 		if !exists {
 			destID, err = PeerIDFromString(destName)

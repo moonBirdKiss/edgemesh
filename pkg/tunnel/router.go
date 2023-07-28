@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"time"
 )
 
 type Response struct {
@@ -43,14 +44,14 @@ const (
 	GroundSize = 1
 )
 
-// 这里采用了hard-coding的方案，默认此时只有一个地球基站
+// NodeList 这里采用了hard-coding的方案，默认此时只有一个地球基站
 // 如果时间充足会考虑部署多个地球基站
 var (
 	NodeList = []string{"edge-0", "edge-1", "edge-2", "edge-3", "edge-4", "edge-5", "edge-6", "edge-7", "master"}
 )
 
 // todo: 这里不应该采用硬编码的方式进行编码，这样做首先无法做到可以添加新的节点，同时也不够优雅
-// the direct use of hardcoding is employed to initialize the information
+// the direct use of hard-coding is employed to initialize the information
 // of cluster,however, it should be replaced by the information from
 // the k8s cluster or from external service
 func (r *RouteTable) initTable(hostname string, hostURL string) {
@@ -79,11 +80,15 @@ func (r *RouteTable) initTable(hostname string, hostURL string) {
 
 	// 首先就要更新一次
 	// todo: 这里只更新了一次，后续需要让其不断的更新
-	err := r.UpdateTable()
-	if err != nil {
-		klog.Info("[Router::initTable]: failed to update table")
-		return
-	}
+	go func() {
+		for {
+			err := r.UpdateTable()
+			if err != nil {
+				klog.Info("[router::NewRouteTable]: failed to update table")
+			}
+			time.Sleep(30 * time.Second)
+		}
+	}()
 }
 
 // UpdateTable 用来发起请求，然后更新路由表
@@ -117,6 +122,12 @@ func (r *RouteTable) Query(dst string) ([]string, error) {
 		klog.Info("[router::query]: the dst is not in the table")
 		return nil, errors.New("the dst is not in the table")
 	}
+
+	if len(path) == 0 {
+		klog.Info("[router::query]: there is no route in the table")
+		return nil, errors.New("No route")
+	}
+
 	return path, nil
 }
 
@@ -151,7 +162,7 @@ func NewRouteTable() *RouteTable {
 	// 初始化hostURL
 	//hostIP, err := getHostIP(NodeHost[0].String())
 
-	// todo: the hostIP is currenty hard-coding
+	// todo: the hostIP is currently hard-coding
 	hostIP := "192.168.1.29"
 	r.initTable(hostname, hostIP)
 	return r
