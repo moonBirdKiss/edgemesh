@@ -254,14 +254,6 @@ func newEdgeTunnel(c *v1alpha1.EdgeTunnelConfig) (*EdgeTunnel, error) {
 		routeTable:       NewRouteTable(),
 	}
 
-	edgeTunnel.routeTable.initTable()
-
-	// update route table
-	err = edgeTunnel.routeTable.updateTable()
-	if err != nil {
-		klog.Infof("Fail to update route table: ", err)
-	}
-
 	// run relay finder
 	go edgeTunnel.runRelayFinder(ddht, peerSource, time.Duration(c.FinderPeriod)*time.Second)
 
