@@ -20,7 +20,7 @@ EDGE7="192.168.1.111"
 
 MASTER="192.168.1.70"
 SLAVE1="192.168.1.71"
-#SLAVE2="192.168.1.209"
+GEO="192.168.1.113"
 
 # k8s-0上更新
 ssh root@$MASTER "ctr -n k8s.io image import /home/ubuntu/Documents/image/edgemesh-amd64.tar"
@@ -28,8 +28,8 @@ ssh root@$MASTER "ctr -n k8s.io image import /home/ubuntu/Documents/image/edgeme
 # k8s-1上更新
 ssh root@$SLAVE1 "ctr -n k8s.io image import /home/ubuntu/Documents/image/edgemesh-amd64.tar"
 
-# k8s-2上更新
-#ssh root@$SLAVE2 "ctr -n k8s.io image import /home/ubuntu/Documents/image/edgemesh-amd64.tar"
+# geo 上更新
+ssh root@$GEO "docker load < /home/ubuntu/Documents/image/edgemesh-amd64.tar"
 
 # edge-0上更新
 ssh dqf@$EDGE0 "sudo docker load < /home/dqf/image/edgemesh-arm64.tar; sudo docker tag langzijiangnan/edgemesh-agent:v1-linux-arm64 langzijiangnan/edgemesh-agent:v1"

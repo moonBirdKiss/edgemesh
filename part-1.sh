@@ -20,6 +20,7 @@ EDGE7="192.168.1.111"
 
 MASTER="192.168.1.70"
 SLAVE1="192.168.1.71"
+GEO="192.168.1.113"
 #SLAVE2="192.168.1.209"
 
 
@@ -39,9 +40,8 @@ docker save langzijiangnan/edgemesh-agent:v1-linux-arm64 > /Users/dengquanfeng/D
 scp /Users/dengquanfeng/Desktop/space-ground/image/edgemesh-amd64.tar root@$MASTER:/home/ubuntu/Documents/image/
 # k8s-1
 scp /Users/dengquanfeng/Desktop/space-ground/image/edgemesh-amd64.tar root@$SLAVE1:/home/ubuntu/Documents/image/
-
-# k8s-2
-# scp /Users/dengquanfeng/Desktop/space-ground/image/edgemesh-amd64.tar root@$SLAVE2:/home/ubuntu/Documents/image/
+# geo
+scp /Users/dengquanfeng/Desktop/space-ground/image/edgemesh-amd64.tar root@$GEO:/home/ubuntu/Documents/image/
 
 
 #edge-0

@@ -22,6 +22,7 @@ type RequestData struct {
 	Index      int `json:"index"`
 	SatSize    int `json:"sat_size"`
 	GroundSize int `json:"ground_size"`
+	Time       int `json:"time"`
 }
 
 type RouteTable struct {
@@ -34,10 +35,13 @@ type RouteTable struct {
 	// index 表示当前的node是NodeList中的第几号节点
 	index    int
 	hostname string
+	time     time.Time
 }
 
 const (
-	TableSize  = 10
+	TableSize = 10
+	//urlSuffix  = ":8000/bent-pipe"
+	//urlSuffix  = ":8000/bent-pipe"
 	urlSuffix  = ":8000/sat-route-update"
 	urlPrefix  = "http://"
 	SatSize    = 8
@@ -97,6 +101,7 @@ func (r *RouteTable) UpdateTable() error {
 		Index:      r.index,
 		SatSize:    SatSize,
 		GroundSize: GroundSize,
+		Time:       int(time.Now().Sub(r.time).Seconds()),
 	}
 	body, err := r.SendPostRequest(req)
 	if err != nil {
@@ -104,12 +109,18 @@ func (r *RouteTable) UpdateTable() error {
 		return err
 	}
 
+	// clear 掉当前的路由表
+	// 初始化路由表
+	for _, key := range NodeList {
+		r.table[key] = []string{}
+	}
+	r.table[r.hostname] = []string{r.hostname}
+
 	// fmt.Println("response Body:", string(body))
 	err = json.Unmarshal(body, &r.table)
 	if err != nil {
 		return err
 	}
-
 	klog.Infof("[router::UpdateTable]: the route table is: %+v", r.table)
 	return nil
 }
@@ -152,6 +163,8 @@ func NewRouteTable() *RouteTable {
 	r := &RouteTable{
 		table: make(map[string][]string, TableSize),
 	}
+
+	r.time = time.Now()
 
 	// 初始化hostname
 	hostname, err := os.Hostname()
